@@ -553,6 +553,10 @@ header.topbar{background:rgba(255,255,255,.64); border-bottom:2px solid rgba(228
 .cw{font-size:1.4rem;}
 .ml-it{font-size:1.4rem;}
 table.tf td{font-size:1.25rem;}
+/* === GỬI KHI NỘP 16/11/2026 === */
+.gui-tt{margin:16px auto 0;max-width:640px;padding:10px 16px;border-radius:12px;font-weight:700;text-align:center;line-height:1.45;background:#FFF6E0;color:#7A5200;border:1px solid #F3DFA8}
+.gui-tt:empty{display:none}
+.gui-tt.xong{background:#E6F6EA;color:#1E6B34;border-color:#BFE3C8}
 </style></head>
 <body class="part-nhan-biet">
 <header class="topbar">
@@ -1421,6 +1425,38 @@ const _od=openDD; openDD=function(btn){ _od(btn); if(!ddMenu)return; const q=QUI
 const REPORT_URL = 'https://script.google.com/macros/s/AKfycbxm64BUW4cIBg4otsO1iFsfDzSaLYAQizo1zd6LGguMgKxOSk3TFaaNnl61Vf6XHYp4/exec';
 const LESSON_ID = 'TiengViet1_Bai61';
 
+/* ================= HỘP THƯ ĐI (gửi khi nộp, 16/11/2026): giữ kết quả trên máy đến khi file báo cáo trả lời đã nhận ================= */
+const HOP_THU=(function(){
+  const K='hopthu_ketqua_v1', HAN=90*864e5; let mem={}; const dang={}, lan={}, nhacDo={};
+  function doc(){ try{ const v=localStorage.getItem(K); return v?JSON.parse(v):{}; }catch(e){ return mem; } }
+  function ghi(o){ mem=o; try{ localStorage.setItem(K,JSON.stringify(o)); }catch(e){} }
+  function tt(id,k){ const el=document.getElementById('guiTT'); if(!el||el.dataset.id!==id) return;
+    el.className='gui-tt '+k;
+    el.textContent={dang:'⏳ Đang gửi kết quả…',cham:'⏳ Mạng chậm hoặc nhiều bạn đang cùng nộp – máy vẫn tự gửi lại kết quả, không cần làm lại bài.',xong:'✓ Đã gửi kết quả.'}[k]; }
+  function them(u,id,b){ const o=doc(); o[id]={u,b,t:Date.now()}; ghi(o); tt(id,'dang'); gui(id); }
+  function gui(id){ const it=doc()[id]; if(!it||dang[id]) return; dang[id]=1;
+    const ac=window.AbortController?new AbortController():null, hen=ac?setTimeout(()=>ac.abort(),90000):0;   /* treo quá 90 giây: bỏ, gửi lại */
+    fetch(it.u,{method:'POST',body:it.b,keepalive:it.b.length<60000,signal:ac?ac.signal:undefined})
+      .then(r=>r.json()).then(j=>{ clearTimeout(hen); dang[id]=0;
+        if(j&&j.ok){ const o=doc(); delete o[id]; ghi(o); lan[id]=0; tt(id,'xong'); if(j.queued) nhac(it.u); }
+        else lai(id); })
+      .catch(()=>{ clearTimeout(hen); dang[id]=0; lai(id); }); }
+  function lai(id){ const n=(lan[id]||0)+1; lan[id]=n; if(n>=2) tt(id,'cham');
+    setTimeout(()=>gui(id), Math.min(120000,5000*Math.pow(2,n-1))*(0.7+Math.random()*0.6)); }
+  function nhac(u,k){ k=k||0; if(nhacDo[u]&&!k) return; nhacDo[u]=1;   /* nhắc file ghi hàng đợi; còn bài chờ / đang bận thì nhắc tiếp (tối đa 15 lần) */
+    const tiep=()=>{ if(k<15) nhac(u,k+1); else nhacDo[u]=0; };
+    setTimeout(()=>{ fetch(u,{method:'POST',body:JSON.stringify({nhacHangDoi:1})}).then(r=>r.json())
+      .then(j=>{ if(j&&(j.ban||j.con>0)) tiep(); else nhacDo[u]=0; }).catch(tiep); }, (k?30000:60000)+Math.random()*60000); }
+  function guiHet(){ const o=doc(), now=Date.now(); let doi=false;
+    Object.keys(o).forEach(id=>{ if(!o[id]||!o[id].u||now-(o[id].t||now)>HAN){ delete o[id]; doi=true; } }); if(doi) ghi(o);
+    Object.keys(o).forEach(gui); }
+  function vang(){ const o=doc(); Object.keys(o).forEach(id=>{ try{ if(navigator.sendBeacon) navigator.sendBeacon(o[id].u,new Blob([o[id].b],{type:'text/plain;charset=utf-8'})); }catch(e){} }); }
+  addEventListener('online',guiHet);
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') guiHet(); else vang(); });
+  addEventListener('pagehide',vang);
+  addEventListener('load',()=>setTimeout(guiHet,1500));
+  return {them,guiHet,doc};
+})();
 const REPORT=(function(){
   let sending=false, pending=false, rec=null, retries=0, attemptId='', finished=false;
   const KEY=()=>{const st=student(); const k=x=>String(x||'').toLowerCase().normalize('NFC').replace(/\s+/g,' ').trim(); return 'bt_'+LESSON_ID+'|'+k(st.name)+'|'+k(st.cls);};
@@ -1450,16 +1486,28 @@ const REPORT=(function(){
         result:RES_LONG[S[i].status]||'Chưa làm', points:points(i), key:mathText(answerText(q))})) };
   }
   /* ---------- gửi về Google Sheet ---------- */
-  function send(){
-    if(!REPORT_URL||REPORT_URL.indexOf('http')!==0||!attemptId) return;
-    if(sending){ pending=true; return; }
-    sending=true; pending=false; const body=JSON.stringify(build());
-    const done=ok=>{ sending=false;
-      if(ok){ retries=0; if(pending) send(); }
-      else if(retries<5){ retries++; setTimeout(send, 3000*retries); } };
-    fetch(REPORT_URL,{method:'POST',body,keepalive:true}).then(r=>r.json().catch(()=>({ok:r.ok}))).then(j=>done(!!j.ok))
-      .catch(()=>fetch(REPORT_URL,{method:'POST',mode:'no-cors',body,keepalive:true}).then(()=>done(true)).catch(()=>done(false)));
+  function send(){ /* === GỬI KHI NỘP 16/11/2026 === */ /* chỉ gửi khi đã nộp; hộp thư đi giữ đến khi file báo cáo nhận */
+    if(!REPORT_URL||REPORT_URL.indexOf('http')!==0||!attemptId||!finished) return;
+    HOP_THU.them(REPORT_URL, attemptId, JSON.stringify(build()));
   }
+  /* === GỬI KHI RỜI TRANG 18/11/2026 === */ /* chưa nộp mà rời trang, có tiến độ mới -> gửi 1 lượt "Đang làm" */
+  let roiKhoa='';
+  function roiTrang(){
+    if(finished||!attemptId||!REPORT_URL||REPORT_URL.indexOf('http')!==0||typeof S==='undefined'||!S) return;
+    try{
+      const th=(typeof THPT!=='undefined'&&THPT&&typeof THPT.daLam==='function');   /* bản đề thi THPT: chưa chấm trước khi nộp */
+      const dl=th?QUIZ_DATA.map((_,i)=>THPT.daLam(i)):null;
+      if(!(th?dl.some(x=>x>0):S.some(x=>x&&(x.status||x.att>0)))) return;            /* chưa làm câu nào: không gửi */
+      const b=build(); if(th) b.answered=dl.filter(x=>x===2).length;
+      const khoa=JSON.stringify([b.answers,b.answered,dl,S.map(x=>x?x.att||0:0)]);
+      if(khoa===roiKhoa) return; roiKhoa=khoa;                                       /* không có gì mới: không gửi lại */
+      const body=JSON.stringify(b); let ok=false;
+      try{ ok=!!(navigator.sendBeacon&&navigator.sendBeacon(REPORT_URL,new Blob([body],{type:'text/plain;charset=utf-8'}))); }catch(e){}
+      if(!ok) fetch(REPORT_URL,{method:'POST',mode:'no-cors',body,keepalive:body.length<60000}).catch(()=>{});
+    }catch(e){}
+  }
+  document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='hidden') roiTrang(); });
+  addEventListener('pagehide',roiTrang);
   /* lưu tiến độ trên máy để tải lại trang thì làm tiếp, không làm lại từ đầu */
   function save(){ if(!attemptId) return; store({attemptId, picks:PICKS, S, cur, t0, done:finished, usedSec}); }
   function progress(){ save(); send(); }
@@ -1523,6 +1571,7 @@ const REPORT=(function(){
     const acts=app.querySelectorAll('.actions'), act=acts[acts.length-1];
     if(act){ const b=document.createElement('button'); b.className='btn btn-xls'; b.id='xlsBtn'; b.textContent='Tải kết quả (Excel)'; b.onclick=download; act.insertBefore(b,act.firstChild);
     }
+    if(act&&REPORT_URL&&REPORT_URL.indexOf('http')===0){ const g=document.createElement('div'); g.className='gui-tt'; g.id='guiTT'; g.dataset.id=attemptId; act.parentNode.insertBefore(g,act); }
     progress(); }
   function prefill(){ // trong LMS: lấy sẵn tên học sinh
     const ln=SCORM.get('cmi.learner_name','cmi.core.student_name'); if(!ln) return;
